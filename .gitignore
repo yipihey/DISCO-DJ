@@ -21,7 +21,15 @@ var/
 *.egg
 GITIGNORE/
 venv/
+.venv/
 .idea/
 .ipynb_checkpoints/
+.DS_Store
 docs/_build
 docs/source
+sims/
+.claude/
+
+# uv
+uv.lock
+.python-version

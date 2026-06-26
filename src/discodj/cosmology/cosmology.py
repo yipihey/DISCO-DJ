@@ -98,9 +98,10 @@ class Cosmology:
 
         growth_dict = self.compute_unnormed_growth(a_table, a_min_integration=s["a_min"])
         superconft_table = self.compute_superconft(a_table)
+        chi_table = self.compute_chi(a_table)
 
         # Update timetables
-        new_timetables = {"a": a_table, "superconft": superconft_table, **growth_dict}
+        new_timetables = {"a": a_table, "superconft": superconft_table, "chi": chi_table, **growth_dict}
         return self.update_timetables(**new_timetables)
 
     def __repr__(self):
@@ -464,6 +465,21 @@ class Cosmology:
         return superconft
 
     @forbidden_for_derivative
+    def compute_chi(self, a: float | AnyArray):
+        """Comoving distance chi(a) in Mpc/h, with chi(a=1) = 0 and chi increasing toward smaller a.
+
+        chi(a) = (c/H0) * integral_a^1 da'/(a'^2 E(a')) in Mpc/h (with c/H0 = 2997.92458 Mpc/h).
+        """
+        da = jnp.diff(a)
+        integrand = 1.0 / (a ** 2 * self.E(a))
+        midpoints = (integrand[:-1] + integrand[1:]) / 2
+        seg = da * midpoints  # positive contributions, ordered from small a to a=1
+        # chi[i] = sum_{j>=i} seg[j], so reverse-cumsum
+        chi = jnp.concatenate([jnp.cumsum(seg[::-1])[::-1], jnp.zeros(1)])
+        c_over_H0_in_Mpc_over_h = 2997.92458  # c/H0 = 2997.92458 Mpc/h (h cancels)
+        return (c_over_H0_in_Mpc_over_h * chi).astype(self._dtype)
+
+    @forbidden_for_derivative
     def get_interpolated_property(self, x: float | AnyArray, key_from: str, key_to: str) -> AnyArray:
         """
         Function to interpolate properties stored in the timetable.
@@ -501,6 +517,26 @@ class Cosmology:
     def a_to_superconft(self, a: float | AnyArray) -> AnyArray:
         """Convert scale factor to superconformal time."""
         return self.get_interpolated_property(a, "a", "superconft")
+
+    @forbidden_for_derivative
+    def chi(self, a: float | AnyArray) -> AnyArray:
+        """Comoving distance chi(a) in Mpc/h. chi(1) = 0, chi grows toward smaller a."""
+        return self.get_interpolated_property(a, "a", "chi")
+
+    @forbidden_for_derivative
+    def chi_to_a(self, chi: float | AnyArray) -> AnyArray:
+        """Inverse of chi(a): map comoving distance (Mpc/h) to scale factor.
+
+        chi is monotonically decreasing in a, so we reverse the tables for jnp.interp.
+        """
+        if not self._timetables:
+            return self.compute_timetables().chi_to_a(chi)
+        chi_tab = jnp.asarray(self._timetables["chi"])[::-1]
+        a_tab = jnp.asarray(self._timetables["a"])[::-1]
+        chi_in = jnp.atleast_1d(chi)
+        is_scalar = jnp.asarray(chi).ndim == 0
+        out = jnp.interp(chi_in, chi_tab, a_tab).astype(self._dtype)
+        return out[0] if is_scalar else out
 
     @forbidden_for_derivative
     def Dplus(self, a: float | AnyArray) -> AnyArray:
